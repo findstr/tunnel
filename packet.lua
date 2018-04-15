@@ -46,11 +46,35 @@ setmetatable(packet_len, { __mode="kv", __index = function(tbl, len)
 	return k
 end})
 
+local mtu_fmt = format("<c%d", MTU)
+local function writetunnel(dst, d)
+	local index = 1
+	local len = #d
+	while len > MTU do
+		local one = unpack(mtu_fmt, d, index)
+		local dat = mtu_head .. one
+		assert(#dat == (MTU+4))
+		socket.write(dst, crypt.aesencode(key, dat))
+		index = index + MTU
+		len = len - MTU
+	end
+	if len > 0 then
+		d = sub(d, index)
+		local len = #d
+		local head = header_len[len]
+		d = head .. d .. sub(keyword, 1, MTU - len)
+		d = crypt.aesencode(key, d)
+		assert(#d == (MTU+4))
+		socket.write(dst, d)
+	end
+end
 
-function M.fromweb(src, dst)
+function M.fromweb(src, dst, first)
 	return function()
-		local fmt = format("<c%d", MTU)
-		--print("transfer", src, dst)
+		if first then
+			writetunnel(dst, first)
+			first = nil
+		end
 		while true do
 			local d = socket.readall(src)
 			if not d then
@@ -68,25 +92,7 @@ function M.fromweb(src, dst)
 					d = d .. d1
 				end
 			end
-			local index = 1
-			local len = #d
-			while len > MTU do
-				local one = unpack(fmt, d, index)
-				local dat = mtu_head .. one
-				assert(#dat == (MTU+4))
-				socket.write(dst, crypt.aesencode(key, dat))
-				index = index + MTU
-				len = len - MTU
-			end
-			if len > 0 then
-				d = sub(d, index)
-				local len = #d
-				local head = header_len[len]
-				d = head .. d .. sub(keyword, 1, MTU - len)
-				d = crypt.aesencode(key, d)
-				assert(#d == (MTU+4))
-				socket.write(dst, d)
-			end
+			writetunnel(dst, d)
 		end
 	end
 end

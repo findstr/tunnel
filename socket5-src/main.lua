@@ -28,6 +28,17 @@ local function auth(fd)
 	print("auth ok")
 end
 
+local function bridge_tunnel(fd, domain, port, firstpacket)
+	local tunnelfd = socket.connect(serveraddr)
+	print("connect server fd", serveraddr, tunnelfd)
+	local hdr = string.pack("<I2", port)
+	domain = crypt.aesencode(key, domain)
+	packet.write(tunnelfd, hdr .. domain)
+	core.fork(packet.fromweb(fd, tunnelfd, firstpacket))
+	core.fork(packet.fromtunnel(tunnelfd, fd))
+
+end
+
 local function connect(fd)
 	local str = socket.read(fd, 4)
 	local ver, req, rev, addr = string.unpack("<I1I1I1I1", str)
@@ -39,16 +50,10 @@ local function connect(fd)
 	--domain name
 	local domain = socket.read(fd, len)
 	print("connect domain", domain)
-	domain = crypt.aesencode(key, domain)
 	str = socket.read(fd, 2)
 	local port = string.unpack(">I2", str)
 	print("connect port", port)
-	local tunnelfd = socket.connect(serveraddr)
-	print("connect server fd", serveraddr, tunnelfd)
-	local hdr = string.pack("<I2", port)
-	packet.write(tunnelfd, hdr .. domain)
-	core.fork(packet.fromweb(fd, tunnelfd))
-	core.fork(packet.fromtunnel(tunnelfd, fd))
+	bridge_tunnel(fd, domain, port)
 	local ack = "\x05\x00\x00\x01\x00\x00\x00\x00\xe9\xc7"
 	socket.write(fd, ack)
 end
@@ -67,4 +72,57 @@ socket.listen(core.envget("socket5"), function(fd, addr)
 		socket.close(fd)
 	end
 end)
+
+local function sni(fd)
+	--record
+	local head = socket.read(fd, 5)
+	local typ, major, minor, len = string.unpack(">I1I1I1I2", head)
+	assert(typ == 22, typ)
+	local offset = 1
+	local body = socket.read(fd, len)
+	local msgtype, n = string.unpack(">I1I3", body, offset)
+	assert(msgtype == 1)
+	offset = offset + 4 + 2 + 4 + 28 --msgtype, msglen client ver random
+	local session_len = string.unpack(">I1", body, offset)
+	offset = offset + session_len + 1
+	local chiper_len = string.unpack(">I2", body, offset)
+	offset = offset + chiper_len + 2
+	local compress_len = string.unpack(">I1", body, offset)
+	offset = offset + compress_len + 1
+	assert(offset < len)
+	--extention
+	local ext_len = string.unpack(">I2", body, offset)
+	offset = offset + 2
+	while ext_len > 0 do
+		local t, l = string.unpack(">I2I2", body, offset)
+		offset = offset + 4
+		ext_len = ext_len - 4
+		if t == 0x0 then --server name
+			while l > 0 do
+				local list_len = string.unpack(">I2", body, offset)
+				offset = offset + 2
+				l = l - 2
+				while list_len > 0 do
+					local nt, nl = string.unpack(">I2I1", body, offset)
+					offset = offset + 3
+					if nt == 0 then
+						return string.sub(body, offset, offset + nl - 1), head .. body
+					end
+					offset = offset + nl
+				end
+			end
+			return nil
+		end
+		offset = offset + l
+		ext_len = ext_len - l
+	end
+	return nil
+end
+
+socket.listen(":443", function(fd, addr)
+	local domain, dat = assert(sni(fd))
+	print("https:", #domain, fd, addr, domain, #dat)
+	bridge_tunnel(fd, domain, 443, dat)
+end)
+
 
