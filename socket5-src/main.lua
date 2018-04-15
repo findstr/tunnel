@@ -1,6 +1,8 @@
 local core = require "sys.core"
 local socket = require "sys.socket"
 local crypt = require "sys.crypt"
+local httpserver = require "http.server"
+local httpclient = require "http.client"
 local packet = require "packet"
 local key = assert(core.envget("crypt"), "crypt key")
 local serveraddr  = assert(core.envget("server"), "server")
@@ -28,16 +30,22 @@ local function auth(fd)
 	print("auth ok")
 end
 
-local function bridge_tunnel(fd, domain, port, firstpacket)
+local function bridge_tunnel(fd, domain, port)
 	local tunnelfd = socket.connect(serveraddr)
-	print("connect server fd", serveraddr, tunnelfd)
+	print("connect server fd", serveraddr, tunnelfd, domain, port)
 	local hdr = string.pack("<I2", port)
 	domain = crypt.aesencode(key, domain)
 	packet.write(tunnelfd, hdr .. domain)
-	core.fork(packet.fromweb(fd, tunnelfd, firstpacket))
-	core.fork(packet.fromtunnel(tunnelfd, fd))
-
+	return tunnelfd
 end
+
+local function transfering(fd, domain, port, firstpacket)
+	local tunnelfd = bridge_tunnel(fd, domain, port)
+	core.fork(packet.fromtunnel(tunnelfd, fd))
+	core.fork(packet.fromweb(fd, tunnelfd, firstpacket))
+end
+
+
 
 local function connect(fd)
 	local str = socket.read(fd, 4)
@@ -53,7 +61,7 @@ local function connect(fd)
 	str = socket.read(fd, 2)
 	local port = string.unpack(">I2", str)
 	print("connect port", port)
-	bridge_tunnel(fd, domain, port)
+	transfering(fd, domain, port)
 	local ack = "\x05\x00\x00\x01\x00\x00\x00\x00\xe9\xc7"
 	socket.write(fd, ack)
 end
@@ -122,7 +130,62 @@ end
 socket.listen(":443", function(fd, addr)
 	local domain, dat = assert(sni(fd))
 	print("https:", #domain, fd, addr, domain, #dat)
-	bridge_tunnel(fd, domain, 443, dat)
+	transfering(fd, domain, 443, dat)
+end)
+
+
+
+httpserver.listen(":8080", function(fd, req, body)
+	if req.method == "CONNECT" then
+		local domain, port = string.match(req.uri, "([^:]+):(%d+)")
+		print("http proxy", domain, port, req.method)
+		httpserver.write(fd, 200, {}, "")
+		local tunnelfd = bridge_tunnel(fd, domain, tonumber(port))
+		core.fork(packet.fromtunnel(tunnelfd, fd))
+		packet.fromweb(fd, tunnelfd)()
+	else
+--[[
+	insert(header, 1, format("%s %s HTTP/1.1", method, abs))
+	insert(header, format("Host: %s", host))
+	insert(header, format("Content-Length: %d", #body))
+	]]--
+		local head = {}
+		local form = {}
+		local method = req.method
+		local url = req.uri
+		req.uri = nil
+		req["User-Agent"] = nil
+		req["Host"] = nil
+		req["version"] = nil
+		req["method"] = nil
+		req["Proxy-Connection"] = nil
+		for k, v in pairs(req.form) do
+			form[#form + 1] = string.format("%s=%s", k, v)
+		end
+		req.form = nil
+		for k, v in pairs(req) do
+			head[#head + 1] = string.format("%s: %s", k, v)
+		end
+		local status, head, body
+		form = table.concat(form, "&")
+		if method == "GET" then
+			url = string.format("%s?%s", url, form)
+			status, head, body = httpclient.GET(url, head)
+			print("--------", method, url, status, head, #body)
+		else
+			assert(method == "POST", method)
+			if #form > 0 then
+				body = form
+			end
+			status, head, body = httpclient.POST(url, head, body)
+		end
+		local tbl = {}
+		head["Transfer-Encoding"] = nil
+		for k, v in pairs(head) do
+			tbl[#tbl+ 1] = string.format("%s: %s", k, v)
+		end
+		httpserver.write(fd, status, tbl, body)
+	end
 end)
 
 
