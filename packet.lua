@@ -78,6 +78,7 @@ function M.fromweb(src, dst, first)
 		while true do
 			local d = socket.readall(src)
 			if not d then
+				core.log("-----luaclose:", dst, src)
 				socket.close(dst)
 				return
 			end
@@ -103,6 +104,7 @@ function M.fromtunnel(src, dst)
 		while true do
 			local d = socket.read(src, ONCE)
 			if not d then
+				core.log("-----luaclose:", dst, src)
 				socket.close(dst)
 				return
 			end
@@ -111,6 +113,24 @@ function M.fromtunnel(src, dst)
 			local fmt = packet_len[count]
 			local dat = unpack(fmt, d, 5)
 			socket.write(dst, dat)
+		end
+	end
+end
+
+function M.transfer(src, dst)
+	return function()
+		while true do
+			local d = socket.read(src, 1)
+			if not d then
+				core.log("-----luaclose:", dst)
+				socket.close(dst)
+				return
+			end
+			local d1 = socket.readall(src)
+			if d1 ~= "" then
+				d = d .. d1
+			end
+			socket.write(dst, d)
 		end
 	end
 end
