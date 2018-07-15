@@ -2,5 +2,9 @@ daemon = 0
 bootstrap = "server-src/main.lua"
 lualib_path = "silly/lualib/?.lua"
 lualib_cpath = "silly/luaclib/?.so"
+logpath = "./log/"
+server = ""
+client = ""
+crypt = ""
+gmailport = 0
 
-include "common.conf"

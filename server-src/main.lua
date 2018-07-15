@@ -39,7 +39,6 @@ socket.listen(":4650", function(fd, addr)
 	core.fork(packet.transfer(fd, google))
 	core.fork(packet.transfer(google, fd))
 end)
-dns.server("173.230.155.5:53")
 local function hello()
 end
 core.start(function()
