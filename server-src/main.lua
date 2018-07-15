@@ -46,4 +46,6 @@ for i = 1, 1025 do
 	dns.resolve("www.google.com", "A")
 end
 print("---------------reserve----ok")
+print(key)
+print(core.envget("server"))
 end)
