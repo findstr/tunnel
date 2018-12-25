@@ -1,7 +1,7 @@
 FROM registry.cn-hangzhou.aliyuncs.com/findstr-vps/silly:latest
-ADD packet.lua /tunnel/packet.lua
-ADD server-src /tunnel/server-src
-WORKDIR /tunnel
+ADD packet.lua /packet.lua
+ADD server-src /server-src
+WORKDIR /
 
-CMD ["./silly/silly", "server-src/config"]"
+CMD ["server-src/config"]"
 
