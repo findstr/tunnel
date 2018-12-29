@@ -1,7 +1,7 @@
 local core = require "sys.core"
 local socket = require "sys.socket"
 local dns = require "sys.dns"
-local crypt = require "sys.crypt"
+local crypto = require "sys.crypto"
 local packet = require "packet"
 
 local key = core.envget("crypt")
@@ -10,7 +10,7 @@ local function tunnel_intenet(tunnelfd)
 	local pk = packet.read(tunnelfd)
 	local port = string.unpack("<I2", pk)
 	local domain = pk:sub(2+1)
-	domain = crypt.aesdecode(key, domain)
+	domain = crypto.aesdecode(key, domain)
 	print(domain, port)
 	if dns.isname(domain) then
 		domain = assert(dns.resolve(domain), domain)

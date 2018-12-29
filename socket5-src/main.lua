@@ -1,6 +1,6 @@
 local core = require "sys.core"
 local socket = require "sys.socket"
-local crypt = require "sys.crypt"
+local crypto = require "sys.crypto"
 local httpserver = require "http.server"
 local httpclient = require "http.client"
 local packet = require "packet"
@@ -34,7 +34,7 @@ local function bridge_tunnel(fd, domain, port)
 	local tunnelfd = socket.connect(serveraddr)
 	print("connect server fd", serveraddr, tunnelfd, domain, port)
 	local hdr = string.pack("<I2", port)
-	domain = crypt.aesencode(key, domain)
+	domain = crypto.aesencode(key, domain)
 	packet.write(tunnelfd, hdr .. domain)
 	return tunnelfd
 end

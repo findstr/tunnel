@@ -1,6 +1,6 @@
 local core = require "sys.core"
 local socket = require "sys.socket"
-local crypt = require "sys.crypt"
+local crypto = require "sys.crypto"
 local key = assert(core.envget("crypt"), "crypt key")
 local pack = string.pack
 local unpack = string.unpack
@@ -54,7 +54,7 @@ local function writetunnel(dst, d)
 		local one = unpack(mtu_fmt, d, index)
 		local dat = mtu_head .. one
 		assert(#dat == (MTU+4))
-		socket.write(dst, crypt.aesencode(key, dat))
+		socket.write(dst, crypto.aesencode(key, dat))
 		index = index + MTU
 		len = len - MTU
 	end
@@ -63,7 +63,7 @@ local function writetunnel(dst, d)
 		local len = #d
 		local head = header_len[len]
 		d = head .. d .. sub(keyword, 1, MTU - len)
-		d = crypt.aesencode(key, d)
+		d = crypto.aesencode(key, d)
 		assert(#d == (MTU+4))
 		socket.write(dst, d)
 	end
@@ -108,7 +108,7 @@ function M.fromtunnel(src, dst)
 				socket.close(dst)
 				return
 			end
-			d = crypt.aesdecode(key, d)
+			d = crypto.aesdecode(key, d)
 			local count = unpack("<I4", d)
 			local fmt = packet_len[count]
 			local dat = unpack(fmt, d, 5)
