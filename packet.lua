@@ -74,7 +74,7 @@ local function waitfor(fd, from, size)
 	if sz < size then
 		return
 	end
-	print("read disable", from)
+	print("-----###+++read disable", from, sz)
 	socket.readctrl(from, "disable")
 	repeat
 		core.sleep(10)
@@ -86,6 +86,7 @@ end
 
 function M.fromweb(src, dst, first)
 	return function()
+		socket.limit(src, 64*1024*1024)
 		if first then
 			writetunnel(dst, first)
 			first = nil
@@ -109,7 +110,7 @@ function M.fromweb(src, dst, first)
 				end
 			end
 			writetunnel(dst, d)
-			waitfor(dst, src, 10*1024*1024)
+			waitfor(dst, src, 1024*1024)
 		end
 	end
 end
@@ -117,6 +118,7 @@ end
 function M.fromtunnel(src, dst)
 	return function()
 		local ONCE =  MTU + 4
+		socket.limit(src, 64*1024*1024)
 		while true do
 			local d = socket.read(src, ONCE)
 			if not d then
@@ -129,7 +131,7 @@ function M.fromtunnel(src, dst)
 			local fmt = packet_len[count]
 			local dat = unpack(fmt, d, 5)
 			socket.write(dst, dat)
-			waitfor(dst, src, 10*1024*1024)
+			waitfor(dst, src, 1024*1024)
 		end
 	end
 end
