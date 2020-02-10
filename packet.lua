@@ -69,6 +69,21 @@ local function writetunnel(dst, d)
 	end
 end
 
+local function waitfor(fd, from, size)
+	local sz = socket.sendsize(fd)
+	if sz < size then
+		return
+	end
+	print("read disable", from)
+	socket.readctrl(from, "disable")
+	repeat
+		core.sleep(10)
+		sz = socket.sendsize(fd)
+	until sz < size
+	print("read enable", from)
+	socket.readctrl(from, "enable")
+end
+
 function M.fromweb(src, dst, first)
 	return function()
 		if first then
@@ -94,6 +109,7 @@ function M.fromweb(src, dst, first)
 				end
 			end
 			writetunnel(dst, d)
+			waitfor(dst, src, 10*1024*1024)
 		end
 	end
 end
@@ -113,6 +129,7 @@ function M.fromtunnel(src, dst)
 			local fmt = packet_len[count]
 			local dat = unpack(fmt, d, 5)
 			socket.write(dst, dat)
+			waitfor(dst, src, 10*1024*1024)
 		end
 	end
 end
