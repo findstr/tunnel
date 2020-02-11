@@ -69,7 +69,7 @@ local function writetunnel(dst, d)
 	end
 end
 
-local function waitfor(fd, from, size)
+local function waitfor(fd, size)
 	local sz = socket.sendsize(fd)
 	if sz < size then
 		return
@@ -82,6 +82,7 @@ end
 
 function M.fromweb(src, dst, first)
 	return function()
+		socket.limit(src, 64*1024*1024)
 		if first then
 			writetunnel(dst, first)
 			first = nil
@@ -109,7 +110,7 @@ function M.fromweb(src, dst, first)
 				end
 			end
 			writetunnel(dst, d)
-			waitfor(dst, src, 1024)
+			waitfor(dst, 1024)
 		end
 	end
 end
@@ -117,6 +118,7 @@ end
 function M.fromtunnel(src, dst)
 	return function()
 		local ONCE =  MTU + 4
+		socket.limit(src, 64*1024*1024)
 		while true do
 			local d = socket.read(src, ONCE)
 			if not d then
@@ -129,7 +131,7 @@ function M.fromtunnel(src, dst)
 			local fmt = packet_len[count]
 			local dat = unpack(fmt, d, 5)
 			socket.write(dst, dat)
-			waitfor(dst, src, 1024)
+			waitfor(dst, 1024)
 		end
 	end
 end
