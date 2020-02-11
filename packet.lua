@@ -2,6 +2,7 @@ local core = require "sys.core"
 local socket = require "sys.socket"
 local crypto = require "sys.crypto"
 local key = assert(core.envget("crypt"), "crypt key")
+local concat = table.concat
 local pack = string.pack
 local unpack = string.unpack
 local sub = string.sub
@@ -21,7 +22,6 @@ function M.read(fd)
 		return
 	end
 	len = string.unpack("<I4", len)
-	--print("read", fd, len)
 	local dat = socket.read(fd, len)
 	return dat
 end
@@ -46,6 +46,7 @@ setmetatable(packet_len, { __mode="kv", __index = function(tbl, len)
 	return k
 end})
 
+local buf = {}
 local mtu_fmt = format("<c%d", MTU)
 local function writetunnel(dst, d)
 	local index = 1
@@ -54,7 +55,7 @@ local function writetunnel(dst, d)
 		local one = unpack(mtu_fmt, d, index)
 		local dat = mtu_head .. one
 		assert(#dat == (MTU+4))
-		socket.write(dst, crypto.aesencode(key, dat))
+		buf[#buf + 1] = crypto.aesencode(key, dat)
 		index = index + MTU
 		len = len - MTU
 	end
@@ -65,19 +66,21 @@ local function writetunnel(dst, d)
 		d = head .. d .. sub(keyword, 1, MTU - len)
 		d = crypto.aesencode(key, d)
 		assert(#d == (MTU+4))
-		socket.write(dst, d)
+		buf[#buf + 1] = d
 	end
-end
-
-local function waitfor(fd, size)
-	local sz = socket.sendsize(fd)
-	if sz < size then
+	local dat = concat(buf)
+	for k, v in pairs(buf) do
+		buf[k] = nil
+	end
+	socket.write(dst, dat)
+	local sz = socket.sendsize(dst)
+	if sz < 32 * 1024 then
 		return
 	end
 	repeat
 		core.sleep(10)
-		sz = socket.sendsize(fd)
-	until sz < size
+		sz = socket.sendsize(dst)
+	until sz < 32*1024
 end
 
 function M.fromweb(src, dst, first)
@@ -87,19 +90,15 @@ function M.fromweb(src, dst, first)
 			first = nil
 		end
 		while true do
-			local d = socket.readall(src)
+			local d = socket.readall(src, 1024*1024)
 			if not d then
 				core.log("-----luaclose:", dst, src)
 				socket.close(dst)
 				return
 			end
 			if d == "" then
-				print("read disable", from)
-				socket.readctrl(src, "enable")
 				d = socket.read(src, 1)
-				print("read enable", from, socket.recvsize(src))
-				socket.readctrl(src, "disable")
-				local d1 = socket.readall(src)
+				local d1 = socket.readall(src, 1024*1024)
 				if not d or not d1 then
 					socket.close(dst)
 					return
@@ -109,7 +108,6 @@ function M.fromweb(src, dst, first)
 				end
 			end
 			writetunnel(dst, d)
-			waitfor(dst, 1024)
 		end
 	end
 end
@@ -129,7 +127,6 @@ function M.fromtunnel(src, dst)
 			local fmt = packet_len[count]
 			local dat = unpack(fmt, d, 5)
 			socket.write(dst, dat)
-			waitfor(dst, 1024)
 		end
 	end
 end
