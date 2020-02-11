@@ -74,14 +74,10 @@ local function waitfor(fd, from, size)
 	if sz < size then
 		return
 	end
-	print("read disable", from)
-	socket.readctrl(from, "disable")
 	repeat
 		core.sleep(10)
 		sz = socket.sendsize(fd)
 	until sz < size
-	print("read enable", from)
-	socket.readctrl(from, "enable")
 end
 
 function M.fromweb(src, dst, first)
@@ -98,7 +94,11 @@ function M.fromweb(src, dst, first)
 				return
 			end
 			if d == "" then
+				print("read disable", from)
+				socket.readctrl(src, "enable")
 				d = socket.read(src, 1)
+				print("read enable", from, socket.recvsize(src))
+				socket.readctrl(src, "disable")
 				local d1 = socket.readall(src)
 				if not d or not d1 then
 					socket.close(dst)
@@ -109,7 +109,7 @@ function M.fromweb(src, dst, first)
 				end
 			end
 			writetunnel(dst, d)
-			waitfor(dst, src, 10*1024*1024)
+			waitfor(dst, src, 1024)
 		end
 	end
 end
@@ -129,7 +129,7 @@ function M.fromtunnel(src, dst)
 			local fmt = packet_len[count]
 			local dat = unpack(fmt, d, 5)
 			socket.write(dst, dat)
-			waitfor(dst, src, 10*1024*1024)
+			waitfor(dst, src, 1024)
 		end
 	end
 end
