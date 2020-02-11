@@ -82,7 +82,6 @@ end
 
 function M.fromweb(src, dst, first)
 	return function()
-		socket.limit(src, 64*1024*1024)
 		if first then
 			writetunnel(dst, first)
 			first = nil
@@ -118,7 +117,6 @@ end
 function M.fromtunnel(src, dst)
 	return function()
 		local ONCE =  MTU + 4
-		socket.limit(src, 64*1024*1024)
 		while true do
 			local d = socket.read(src, ONCE)
 			if not d then
