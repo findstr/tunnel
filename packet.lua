@@ -69,9 +69,20 @@ local function writetunnel(dst, d)
 	end
 end
 
+local function waitfor(fd, size)
+	local sz = socket.sendsize(fd)
+	if sz < size then
+		return
+	end
+	repeat
+		core.sleep(10)
+		sz = socket.sendsize(fd)
+	until sz < size
+end
+
 function M.fromweb(src, dst, first)
 	return function()
-		socket.limit(src, 1*1024*1024)
+		socket.limit(src, 64*1024*1024)
 		if first then
 			writetunnel(dst, first)
 			first = nil
@@ -84,11 +95,11 @@ function M.fromweb(src, dst, first)
 				return
 			end
 			if d == "" then
-				print("read enable", src)
+				print("read disable", from)
 				socket.readctrl(src, "enable")
 				d = socket.read(src, 1)
+				print("read enable", from, socket.recvsize(src))
 				socket.readctrl(src, "disable")
-				print("read disable", src, socket.recvsize(src))
 				local d1 = socket.readall(src)
 				if not d or not d1 then
 					socket.close(dst)
@@ -99,6 +110,7 @@ function M.fromweb(src, dst, first)
 				end
 			end
 			writetunnel(dst, d)
+			waitfor(dst, 1024)
 		end
 	end
 end
@@ -106,12 +118,9 @@ end
 function M.fromtunnel(src, dst)
 	return function()
 		local ONCE =  MTU + 4
-		socket.limit(src, 1*1024*1024)
+		socket.limit(src, 64*1024*1024)
 		while true do
-			print("read enable", src)
-			socket.readctrl(src, "enable")
 			local d = socket.read(src, ONCE)
-
 			if not d then
 				core.log("-----luaclose:", dst, src)
 				socket.close(dst)
@@ -122,6 +131,7 @@ function M.fromtunnel(src, dst)
 			local fmt = packet_len[count]
 			local dat = unpack(fmt, d, 5)
 			socket.write(dst, dat)
+			waitfor(dst, 1024)
 		end
 	end
 end
