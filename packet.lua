@@ -84,11 +84,7 @@ function M.fromweb(src, dst, first)
 				return
 			end
 			if d == "" then
-				print("read enable", src)
-				socket.readctrl(src, "enable")
 				d = socket.read(src, 1)
-				socket.readctrl(src, "disable")
-				print("read disable", src, socket.recvsize(src))
 				local d1 = socket.readall(src)
 				if not d or not d1 then
 					socket.close(dst)
@@ -108,8 +104,6 @@ function M.fromtunnel(src, dst)
 		local ONCE =  MTU + 4
 		socket.limit(src, 1*1024*1024)
 		while true do
-			print("read enable", src)
-			socket.readctrl(src, "enable")
 			local d = socket.read(src, ONCE)
 
 			if not d then
