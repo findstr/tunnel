@@ -25,7 +25,7 @@ end
 
 socket.listen(core.envget("server"), function(tunnelfd, addr)
         print(tunnelfd, "from", addr)
-	socket.limit(tunnelfd, 1024 * 1024 * 1024)
+	socket.limit(tunnelfd, 64 * 1024 * 1024)
 	local ok, err = core.pcall(tunnel_intenet, tunnelfd)
 	if not ok then
 		print(err)
