@@ -6,5 +6,4 @@ logpath = "./log/"
 server = ""
 client = ""
 crypt = ""
-gmailport = 0
-
+include "common.conf"
