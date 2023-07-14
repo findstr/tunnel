@@ -1,13 +1,15 @@
 local core = require "sys.core"
-local socket = require "sys.socket"
+local logger = require "sys.logger"
+local env = require "sys.env"
+local socket = require "sys.net.tcp"
 local crypto = require "sys.crypto"
-local key = assert(core.envget("crypt"), "crypt key")
+local key = assert(env.get("crypt"), "crypt key")
 local concat = table.concat
 local pack = string.pack
 local unpack = string.unpack
 local sub = string.sub
 local format = string.format
-local MTU = 1400
+local MTU = 536
 local M = {}
 
 function M.write(fd, dat)
@@ -70,9 +72,9 @@ local function writetunnel(dst, d)
 	end
 	local dat = concat(buf)
 	for k, v in pairs(buf) do
+		socket.write(dst, v)
 		buf[k] = nil
 	end
-	socket.write(dst, dat)
 	local sz = socket.sendsize(dst)
 	if sz < 32 * 1024 then
 		return
@@ -92,7 +94,7 @@ function M.fromweb(src, dst, first)
 		while true do
 			local d = socket.readall(src, 1024*1024)
 			if not d then
-				core.log("-----luaclose:", dst, src)
+				logger.info("-----luaclose:", dst, src)
 				socket.close(dst)
 				return
 			end
@@ -118,7 +120,7 @@ function M.fromtunnel(src, dst)
 		while true do
 			local d = socket.read(src, ONCE)
 			if not d then
-				core.log("-----luaclose:", dst, src)
+				logger.info("-----luaclose:", dst, src)
 				socket.close(dst)
 				return
 			end
@@ -136,7 +138,7 @@ function M.transfer(src, dst)
 		while true do
 			local d = socket.read(src, 1)
 			if not d then
-				core.log("-----luaclose:", dst)
+				logger.info("-----luaclose:", dst)
 				socket.close(dst)
 				return
 			end

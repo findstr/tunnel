@@ -1,10 +1,14 @@
 local core = require "sys.core"
-local socket = require "sys.socket"
+local log = require "sys.logger"
+local env = require "sys.env"
+local socket = require "sys.net.tcp"
 local dns = require "sys.dns"
 local crypto = require "sys.crypto"
 local packet = require "packet"
+local http = require "http.server"
+local prometheus = require "sys.metrics.prometheus"
 
-local key = core.envget("crypt")
+local key = env.get("crypt")
 
 local function tunnel_intenet(tunnelfd)
 	local pk = packet.read(tunnelfd)
@@ -13,17 +17,17 @@ local function tunnel_intenet(tunnelfd)
 	domain = crypto.aesdecode(key, domain)
 	print(domain, port)
 	if dns.isname(domain) then
-		domain = assert(dns.resolve(domain), domain)
+		domain = assert(dns.lookup(domain, dns.A), domain)
 	end
 	local addr = string.format("%s:%d", domain, port)
 	local fd = socket.connect(addr)
 	--print("connect", fd, domain, addr)
-	core.log("----tunnel bridge:", tunnelfd, fd)
+	log.info("----tunnel bridge:", tunnelfd, fd)
 	core.fork(packet.fromtunnel(tunnelfd, fd))
 	core.fork(packet.fromweb(fd, tunnelfd))
 end
 
-socket.listen(core.envget("server"), function(tunnelfd, addr)
+socket.listen(env.get("server"), function(tunnelfd, addr)
         print(tunnelfd, "from", addr)
 	socket.limit(tunnelfd, 64 * 1024 * 1024)
 	local ok, err = core.pcall(tunnel_intenet, tunnelfd)
@@ -39,13 +43,28 @@ socket.listen(":4650", function(fd, addr)
 	core.fork(packet.transfer(fd, google))
 	core.fork(packet.transfer(google, fd))
 end)
-local function hello()
-end
+
+http.listen {
+	addr = ":8001",
+	handler = function(req)
+		if req.uri == "/metrics" then
+			http.write(req.sock, 200, {
+				["Content-Type"] = "text/plain"
+			}, prometheus.gather())
+		else
+			print("Unsupport uri", req.uri)
+			http.write(req.sock, 404,
+				{["Content-Type"] = "text/plain"},
+				"404 Page Not Found")
+		end
+	end,
+}
+
 core.start(function()
 for i = 1, 1025 do
-	dns.resolve("www.google.com", "A")
+	dns.resolve("www.google.com", dns.A)
 end
 print("---------------reserve----ok")
 print(key)
-print(core.envget("server"))
+print(env.get("server"))
 end)
