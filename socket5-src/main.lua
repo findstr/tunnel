@@ -1,14 +1,85 @@
-local core = require "sys.core"
-local socket = require "sys.socket"
-local crypto = require "sys.crypto"
-local httpserver = require "http.server"
-local httpclient = require "http.client"
+local core = require "core"
+local logger = require "core.logger"
+local socket = require "core.net.tcp"
+local env = require "core.env"
+
+env.load("./common.conf")
+
 local packet = require "packet"
-local key = assert(core.envget("crypt"), "crypt key")
-local serveraddr  = assert(core.envget("server"), "server")
+
+local serveraddr  = assert(env.get("server"), "server")
+local key = assert(env.get("crypt"), "crypt")
+
+local idx = 0
+local round_robin = 1
+local tunnel_fds = {}
+local tunnelfd_to_uuid = {}
+local uuid_to_fd = {}
+local tunnel_count<const> = 128
+
+local function check_tunnels()
+	if #tunnel_fds >= tunnel_count then
+		return
+	end
+	for i = #tunnel_fds + 1, tunnel_count do
+		local fd = socket.connect(serveraddr)
+		logger.infof("connect to server:%s fd:%s", serveraddr, fd)
+		if not fd then
+			logger.error("connect server failed")
+		else
+			packet.writeauth(fd, 0, env.get("crypt"))
+			local cmd, uuid_start, err = packet.readpacket(fd)
+			if not cmd then
+				logger.errorf("read server failed: %s", err)
+				core.sleep(100)
+			else
+				tunnel_fds[#tunnel_fds + 1] = fd
+				tunnelfd_to_uuid[fd] = uuid_start
+				core.fork(function()
+					while true do
+						local cmd, uuid, data = packet.readpacket(fd)
+						if not cmd or not uuid then -- tunnel closed
+							for uuid, sfd in pairs(uuid_to_fd) do
+								local uuid_tag = uuid & 0xffffffff00000000
+								if uuid_tag == uuid_start then
+									socket.close(sfd)
+									uuid_to_fd[uuid] = nil
+								end
+							end
+							for i, tfd in pairs(tunnel_fds) do
+								if tfd == fd then
+									table.remove(tunnel_fds, i)
+									tunnelfd_to_uuid[tfd] = nil
+									break
+								end
+							end
+							break
+						end
+						if cmd == packet.DATA then
+							local fd = uuid_to_fd[uuid]
+							if fd then
+								socket.write(fd, data)
+							end
+						elseif cmd == packet.CLOSE then
+							local fd = uuid_to_fd[uuid]
+							if fd then
+								socket.close(fd)
+								uuid_to_fd[uuid] = nil
+							end
+						end
+					end
+				end)
+			end
+		end
+	end
+end
+
 local function auth(fd)
-	print("auth start")
+	logger.info("auth start")
 	local str = socket.read(fd, 3)
+	if not str then
+		return
+	end
 	local ver, nr, method = string.unpack("<I1I1I1", str)
 	print(ver, nr, method)
 	assert(ver == 0x05)
@@ -18,7 +89,11 @@ local function auth(fd)
 	elseif nr > 1 then
 		nr = nr - 1
 		str = socket.read(fd, nr)
-		for i = 1, str do
+		if not str then
+			logger.error("auth read failed")
+			return
+		end
+		for i = 1, #str do
 			if str:byte(i) == 0x0 then
 				noauth = true
 			end
@@ -27,40 +102,44 @@ local function auth(fd)
 	assert(noauth, "not support auth")
 	local ack = string.pack("<I1I1", 0x05, 0x00)
 	socket.write(fd, ack)
-	print("auth ok")
-end
-
-local function bridge_tunnel(fd, domain, port)
-	local tunnelfd = socket.connect(serveraddr)
-	print("connect server fd", serveraddr, tunnelfd, domain, port)
-	local hdr = string.pack("<I2", port)
-	domain = crypto.aesencode(key, domain)
-	packet.write(tunnelfd, hdr .. domain)
-	return tunnelfd
+	logger.info("auth success")
 end
 
 local function transfering(fd, domain, port, firstpacket)
-	local tunnelfd = bridge_tunnel(fd, domain, port)
-	core.fork(packet.fromtunnel(tunnelfd, fd))
-	core.fork(packet.fromweb(fd, tunnelfd, firstpacket))
+	repeat
+		check_tunnels()
+	until #tunnel_fds > 0
+	local id = (idx + 1) & 0x7fffffff
+	idx = id
+	local rr = (round_robin + 1) % #tunnel_fds + 1
+	round_robin = rr
+	local tunnelfd =tunnel_fds[rr]
+	local uuid = tunnelfd_to_uuid[tunnelfd] + id
+	uuid_to_fd[uuid] = fd
+	logger.info("write open:", uuid)
+	packet.writeopen(tunnelfd, uuid, domain, port)
+	if firstpacket then
+		packet.writedata(tunnelfd, uuid, firstpacket)
+	end
+	core.fork(function()
+		packet.fromraw(tunnelfd, uuid, fd)
+	end)
 end
-
-
 
 local function connect(fd)
 	local str = socket.read(fd, 4)
 	local ver, req, rev, addr = string.unpack("<I1I1I1I1", str)
-	print("connect", ver, req, rev, addr)
+	logger.info("connect", ver, req, rev, addr)
 	assert(addr == 3, "only support domain")
 	--domain len
 	str = socket.read(fd, 1)
 	local len = str:byte(1)
 	--domain name
 	local domain = socket.read(fd, len)
-	print("connect domain", domain)
+	logger.info("connect domain", domain)
 	str = socket.read(fd, 2)
 	local port = string.unpack(">I2", str)
-	print("connect port", port)
+	logger.info("connect port", port)
 	transfering(fd, domain, port)
 	local ack = "\x05\x00\x00\x01\x00\x00\x00\x00\xe9\xc7"
 	socket.write(fd, ack)
@@ -72,8 +151,8 @@ local function socket5(fd)
 end
 
 
-socket.listen(core.envget("socket5"), function(fd, addr)
-	print(fd, "from", addr)
+socket.listen(env.get("socket5"), function(fd, addr)
+	logger.info(fd, "from", addr)
 	local ok, err = core.pcall(socket5, fd)
 	if not ok then
 		print(err)
@@ -127,65 +206,29 @@ local function sni(fd)
 	return nil
 end
 
-socket.listen(":443", function(fd, addr)
+socket.listen("0.0.0.0:443", function(fd, addr)
 	local domain, dat = assert(sni(fd))
-	print("https:", #domain, fd, addr, domain, #dat)
+	if not domain then
+		logger.errorf("connect domain err:", domain, dat)
+		return
+	end
+	logger.infof("https://%s addr:%s fd:%s datalen:%s", domain, addr, fd, #dat)
 	transfering(fd, domain, 443, dat)
 end)
 
+socket.listen("0.0.0.0:9930", function(fd, addr)
+	transfering(fd, "imap.gmail.com", 993, dat)
+end)
 
 
-httpserver.listen(":8080", function(fd, req, body)
-	if req.method == "CONNECT" then
-		local domain, port = string.match(req.uri, "([^:]+):(%d+)")
-		print("http proxy", domain, port, req.method)
-		httpserver.write(fd, 200, {}, "")
-		local tunnelfd = bridge_tunnel(fd, domain, tonumber(port))
-		core.fork(packet.fromtunnel(tunnelfd, fd))
-		packet.fromweb(fd, tunnelfd)()
-	else
---[[
-	insert(header, 1, format("%s %s HTTP/1.1", method, abs))
-	insert(header, format("Host: %s", host))
-	insert(header, format("Content-Length: %d", #body))
-	]]--
-		local head = {}
-		local form = {}
-		local method = req.method
-		local url = req.uri
-		req.uri = nil
-		req["User-Agent"] = nil
-		req["Host"] = nil
-		req["version"] = nil
-		req["method"] = nil
-		req["Proxy-Connection"] = nil
-		for k, v in pairs(req.form) do
-			form[#form + 1] = string.format("%s=%s", k, v)
+core.fork(function()
+	while true do
+		core.sleep(30000)
+		for tunnelfd in pairs(tunnelfd_to_uuid) do
+			packet.writeping(tunnelfd)
 		end
-		req.form = nil
-		for k, v in pairs(req) do
-			head[#head + 1] = string.format("%s: %s", k, v)
-		end
-		local status, head, body
-		form = table.concat(form, "&")
-		if method == "GET" then
-			url = string.format("%s?%s", url, form)
-			status, head, body = httpclient.GET(url, head)
-			print("--------", method, url, status, head, #body)
-		else
-			assert(method == "POST", method)
-			if #form > 0 then
-				body = form
-			end
-			status, head, body = httpclient.POST(url, head, body)
-		end
-		local tbl = {}
-		head["Transfer-Encoding"] = nil
-		for k, v in pairs(head) do
-			tbl[#tbl+ 1] = string.format("%s: %s", k, v)
-		end
-		httpserver.write(fd, status, tbl, body)
 	end
 end)
 
+check_tunnels()
 
