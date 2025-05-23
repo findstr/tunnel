@@ -1,6 +1,5 @@
 local env = require "core.env"
 local logger = require "core.logger"
-local socket = require "core.net.tcp"
 local cipher = require "core.crypto.cipher"
 
 local key = assert(env.get("crypt"), "crypt")
@@ -29,21 +28,16 @@ local M = {
 	DATA = DATA,
 }
 
-function M.write(fd, dat)
+---@param sock core.websocket.socket
+---@param dat string
+function M.write(sock, dat)
 	encryptor:reset(key, iv)
 	local enc = encryptor:final(dat)
-	local len = #enc
-	local hdr = string.pack("<I4", len)
-	socket.write(fd, hdr .. enc)
+	sock:write(enc)
 end
 
-function M.read(fd)
-	local len, err = socket.read(fd, 4)
-	if not len then
-		return nil, err
-	end
-	len = string.unpack("<I4", len)
-	local dat, err = socket.read(fd, len)
+function M.read(sock)
+	local dat, err = sock:read()
 	if not dat then
 		return nil, err
 	end
@@ -53,42 +47,42 @@ function M.read(fd)
 end
 
 
-function M.writeauth(fd, uuid, key)
+function M.writeauth(sock, uuid, key)
 	local pk = pack("<I1I8", AUTH, uuid) .. key
-	return M.write(fd, pk)
+	return M.write(sock, pk)
 end
 
-function M.writehello(fd, uuid)
+function M.writehello(sock, uuid)
 	local pk = pack("<I1I8", HELLO, uuid)
-	return M.write(fd, pk)
+	return M.write(sock, pk)
 end
 
-function M.writeopen(fd, uuid, domain, port)
+function M.writeopen(sock, uuid, domain, port)
 	local pk = pack("<I1I8", OPEN, uuid) .. format("%s:%d", domain, port)
-	return M.write(fd, pk)
+	return M.write(sock, pk)
 end
 
-function M.writeclose(fd, uuid)
+function M.writeclose(sock, uuid)
 	local pk = pack("<I1I8", CLOSE, uuid)
-	return M.write(fd, pk)
+	return M.write(sock, pk)
 end
 
-function M.writedata(fd, uuid, data)
+function M.writedata(sock, uuid, data)
 	logger.info("write DATA uuid:", uuid, #data)
 	local pk = pack("<I1I8", DATA, uuid) .. data
-	return M.write(fd, pk)
+	return M.write(sock, pk)
 end
 
-function M.writeping(fd)
+function M.writeping(sock)
 	local pk = pack("<I1I8", PING, 0)
-	return M.write(fd, pk)
+	return M.write(sock, pk)
 end
 
-function M.readpacket(fd)
+function M.readpacket(sock)
 
-	local pk, err = M.read(fd)
+	local pk, err = M.read(sock)
 	if not pk then
-		logger.info("readpacket", fd, "read err:", err)
+		logger.info("readpacket", sock.fd, "read err:", err)
 		return nil, nil, err
 	end
 	local cmd, uuid = unpack("<I1I8", pk)
@@ -119,18 +113,23 @@ function M.readpacket(fd)
 	end
 end
 
-function M.fromraw(tunnelfd, uuid, fd)
+local tcp = require "core.net.tcp"
+
+--- @param tunnel core.websocket.socket
+--- @param uuid string
+--- @param fd integer
+function M.fromraw(tunnel, uuid, fd)
 	while true do
-		local d = socket.read(fd, 1)
+		local d = tcp.read(fd, 1)
 		if not d then
 			break
 		end
-		local d1 = socket.readall(fd, 1024*1024)
+		local d1 = tcp.readall(fd, 1024*1024)
 		if d1 and d1 ~= "" then
 			d = d .. d1
 		end
 		if #d > 0 then
-			M.writedata(tunnelfd, uuid, d)
+			M.writedata(tunnel, uuid, d)
 		end
 	end
 end

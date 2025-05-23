@@ -4,6 +4,7 @@ local logger = require "core.logger"
 local env = require "core.env"
 local socket = require "core.net.tcp"
 local http = require "core.http"
+local websocket = require "core.websocket"
 local prometheus = require "core.metrics.prometheus"
 
 local assert = assert
@@ -34,11 +35,12 @@ local function tcp_connect(addr)
 	return fd
 end
 
-local function control(tunnelfd)
+---@param tunnel core.websocket.socket
+local function control(tunnel)
 	local uuid_to_fd = {}
-	local cmd, uuid, key = packet.readpacket(tunnelfd)
+	local cmd, uuid, key = packet.readpacket(tunnel)
 	if not cmd then
-		logger.info("control", tunnelfd, "read err:", cmd)
+		logger.info("control", tunnel.fd, "read err:", cmd)
 		return
 	end
 	assert(cmd == packet.AUTH, "need auth")
@@ -46,11 +48,11 @@ local function control(tunnelfd)
 		logger.error("auth failed", key)
 		return
 	end
-	packet.writehello(tunnelfd, tunnelfd << 32)
+	packet.writehello(tunnel, tunnel.fd << 32)
 	while true do
-		local cmd, uuid, ud = packet.readpacket(tunnelfd)
+		local cmd, uuid, ud = packet.readpacket(tunnel)
 		if not cmd then
-			logger.info("control", tunnelfd, "read err:", ud)
+			logger.info("control", tunnel.fd, "read err:", ud)
 			return
 		end
 		assert(uuid, "need uuid")
@@ -58,15 +60,15 @@ local function control(tunnelfd)
 			local addr = ud
 			local fd = tcp_connect(addr)
 			if not fd then
-				packet.writeclose(tunnelfd, uuid)
+				packet.writeclose(tunnel, uuid)
 				return
 			end
 			socket.limit(fd, 1 * 1024 * 1024)
 			uuid_to_fd[uuid] = fd
 			uuid_to_fd[fd] = uuid
 			core.fork(function()
-				packet.fromraw(tunnelfd, uuid, fd)
-				packet.writeclose(tunnelfd, uuid)
+				packet.fromraw(tunnel, uuid, fd)
+				packet.writeclose(tunnel, uuid)
 				uuid_to_fd[uuid] = nil
 			end)
 		elseif cmd == packet.CLOSE then
@@ -85,14 +87,17 @@ local function control(tunnelfd)
 	end
 end
 
-socket.listen(env.get("server"), function(tunnelfd, addr)
-        print(tunnelfd, "from", addr)
-	local ok, err = core.pcall(control, tunnelfd)
-	if not ok then
-		print(err)
-		socket.close(tunnelfd)
-	end
-end)
+websocket.listen {
+	addr = ":8080",
+	handler = function(sock)
+		print("from", sock.stream.remoteaddr)
+		local ok, err = core.pcall(control, sock)
+		if not ok then
+			print(err)
+			sock:close()
+		end
+	end,
+}
 
 http.listen {
 	addr = ":8001",

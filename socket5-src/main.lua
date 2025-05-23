@@ -1,43 +1,49 @@
 local core = require "core"
 local logger = require "core.logger"
 local socket = require "core.net.tcp"
+local websocket = require "core.websocket"
 local env = require "core.env"
+local fakeip = require "fakeip"
+local dns = require "core.dns"
+
+
+print(dns.lookup("esa.gotocoding.com", dns.A))
 
 env.load("./common.conf")
 
 local packet = require "packet"
-
 local serveraddr  = assert(env.get("server"), "server")
-local key = assert(env.get("crypt"), "crypt")
 
 local idx = 0
 local round_robin = 1
 local tunnel_fds = {}
 local tunnelfd_to_uuid = {}
 local uuid_to_fd = {}
-local tunnel_count<const> = 128
+local tunnel_count<const> = 64
 
 local function check_tunnels()
 	if #tunnel_fds >= tunnel_count then
 		return
 	end
 	for i = #tunnel_fds + 1, tunnel_count do
-		local fd = socket.connect(serveraddr)
-		logger.infof("connect to server:%s fd:%s", serveraddr, fd)
-		if not fd then
-			logger.error("connect server failed")
+		local sock, err = websocket.connect(serveraddr)
+		if not sock then
+			logger.errorf("connect server:%s err:%s", serveraddr, err)
 		else
-			packet.writeauth(fd, 0, env.get("crypt"))
-			local cmd, uuid_start, err = packet.readpacket(fd)
+			logger.infof("connect to server:%s fd:%s", serveraddr, sock.fd)
+			packet.writeauth(sock, 0, env.get("crypt"))
+			print("1111111")
+			local cmd, uuid_start, err = packet.readpacket(sock)
+			print("1222222")
 			if not cmd then
 				logger.errorf("read server failed: %s", err)
 				core.sleep(100)
 			else
-				tunnel_fds[#tunnel_fds + 1] = fd
-				tunnelfd_to_uuid[fd] = uuid_start
+				tunnel_fds[#tunnel_fds + 1] = sock
+				tunnelfd_to_uuid[sock] = uuid_start
 				core.fork(function()
 					while true do
-						local cmd, uuid, data = packet.readpacket(fd)
+						local cmd, uuid, data = packet.readpacket(sock)
 						if not cmd or not uuid then -- tunnel closed
 							for uuid, sfd in pairs(uuid_to_fd) do
 								local uuid_tag = uuid & 0xffffffff00000000
@@ -46,10 +52,10 @@ local function check_tunnels()
 									uuid_to_fd[uuid] = nil
 								end
 							end
-							for i, tfd in pairs(tunnel_fds) do
-								if tfd == fd then
+							for i, tsock in pairs(tunnel_fds) do
+								if tsock == sock then
 									table.remove(tunnel_fds, i)
-									tunnelfd_to_uuid[tfd] = nil
+									tunnelfd_to_uuid[tsock] = nil
 									break
 								end
 							end
@@ -70,6 +76,7 @@ local function check_tunnels()
 					end
 				end)
 			end
+			break
 		end
 	end
 end
@@ -130,16 +137,32 @@ local function connect(fd)
 	local str = socket.read(fd, 4)
 	local ver, req, rev, addr = string.unpack("<I1I1I1I1", str)
 	logger.info("connect", ver, req, rev, addr)
-	assert(addr == 3, "only support domain")
-	--domain len
-	str = socket.read(fd, 1)
-	local len = str:byte(1)
-	--domain name
-	local domain = socket.read(fd, len)
-	logger.info("connect domain", domain)
+	local domain
+	if addr == 3 then
+		-- domain
+		str = socket.read(fd, 1)
+		if not str then
+			logger.error("connect read failed")
+			return
+		end
+		local len = str:byte(1)
+		domain = socket.read(fd, len)
+	elseif addr == 1 then
+		-- IPv4
+		local ip_bytes = socket.read(fd, 4)
+		if not ip_bytes then
+			logger.error("connect read failed")
+			return
+		end
+		local ip = string.format("%d.%d.%d.%d", ip_bytes:byte(1, 4))
+		domain = fakeip[ip] or ip
+		print("***ip", ip, domain)
+	else
+		error("unsupported addr type: " .. tostring(addr))
+	end
 	str = socket.read(fd, 2)
 	local port = string.unpack(">I2", str)
-	logger.info("connect port", port)
+	logger.info("connect domain", domain, port)
 	transfering(fd, domain, port)
 	local ack = "\x05\x00\x00\x01\x00\x00\x00\x00\xe9\xc7"
 	socket.write(fd, ack)
@@ -150,7 +173,11 @@ local function socket5(fd)
 	connect(fd)
 end
 
+print("1socks5:", env.get("socket5"))
 
+check_tunnels()
+
+print("2socks5:", env.get("socket5"))
 socket.listen(env.get("socket5"), function(fd, addr)
 	logger.info(fd, "from", addr)
 	local ok, err = core.pcall(socket5, fd)
@@ -217,18 +244,16 @@ socket.listen("0.0.0.0:443", function(fd, addr)
 end)
 
 socket.listen("0.0.0.0:9930", function(fd, addr)
-	transfering(fd, "imap.gmail.com", 993, dat)
+	transfering(fd, "imap.gmail.com", 993)
 end)
 
 
 core.fork(function()
 	while true do
 		core.sleep(30000)
-		for tunnelfd in pairs(tunnelfd_to_uuid) do
-			packet.writeping(tunnelfd)
+		for tunnel in pairs(tunnelfd_to_uuid) do
+			packet.writeping(tunnel)
 		end
 	end
 end)
-
-check_tunnels()
 
