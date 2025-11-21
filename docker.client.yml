@@ -4,7 +4,7 @@ services:
     ports:
       - "1080:1080"    # SOCKS5 proxy
       - "443:443"      # TLS SNI proxy
-      - "9930:9930"    # Fixed proxy
+      - "993:993"    # Fixed proxy
     environment:
       - KEY=${KEY:-0000000000000000}
       - SERVER=${SERVER:-127.0.0.1:443}

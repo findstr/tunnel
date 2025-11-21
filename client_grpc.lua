@@ -332,7 +332,7 @@ logger.infof("[client] sni proxy listening on 0.0.0.0:443")
 
 -- Fixed port proxy example (optional)
 tcp.listen {
-	addr = "0.0.0.0:9930",
+	addr = "0.0.0.0:993",
 	accept = function(conn)
 		logger.info("[client] fixed proxy connection")
 		create_tunnel(conn, "imap.gmail.com", 993)
