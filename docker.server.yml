@@ -1,0 +1,10 @@
+services:
+  tunnel-server:
+    image: tunnel:server
+    ports:
+      - "8443:443"
+    environment:
+      - KEY=${KEY:-0000000000000000}
+      - LISTEN=${LISTEN:-0.0.0.0:443}
+    restart: unless-stopped
+    container_name: tunnel-server

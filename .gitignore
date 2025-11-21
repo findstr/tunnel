@@ -1,0 +1,24 @@
+# Environment variables (contains sensitive keys)
+.env
+
+# Logs
+*.log
+*.pid
+
+# Docker
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak

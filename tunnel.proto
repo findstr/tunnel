@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package tunnel;
+
+message ConnectRequest {
+  string domain = 1;   // Target domain:port (only in first request)
+  bytes data = 2;      // Payload data
+  bytes pad = 3;       // Random padding
+}
+
+message ConnectResponse {
+  bytes data = 1;      // Payload data
+  bytes pad = 2;       // Random padding
+}
+
+service Tunnel {
+  rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
+}

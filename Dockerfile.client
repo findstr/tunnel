@@ -1,0 +1,11 @@
+# Tunnel Client
+FROM ghcr.io/findstr/silly:alpine
+
+WORKDIR /app
+
+# Copy tunnel project files
+COPY client_grpc.lua /app/
+COPY tunnel.proto /app/
+COPY common.conf /app/common.conf
+
+CMD ["/app/client_grpc.lua"]
