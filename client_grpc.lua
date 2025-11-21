@@ -131,7 +131,7 @@ local function socks5_auth(conn)
 
 	local ver, nr, method = string.unpack("<I1I1I1", str)
 	if ver ~= 0x05 then
-		logger.errorf("[client] invalid socks version: %d", ver)
+		logger.errorf("[client] invalid socks version: %s", ver)
 		return false
 	end
 
@@ -167,7 +167,7 @@ local function socks5_connect(conn)
 
 	local ver, cmd, rsv, atyp = string.unpack("<I1I1I1I1", str)
 	if cmd ~= 1 then  -- CONNECT
-		logger.errorf("[client] unsupported socks command: %d", cmd)
+		logger.errorf("[client] unsupported socks command: %s", cmd)
 		return nil, nil
 	end
 
@@ -186,7 +186,7 @@ local function socks5_connect(conn)
 		end
 		domain = string.format("%d.%d.%d.%d", ip_bytes:byte(1, 4))
 	else
-		logger.errorf("[client] unsupported address type: %d", atyp)
+		logger.errorf("[client] unsupported address type: %s", atyp)
 		return nil, nil
 	end
 
@@ -217,7 +217,7 @@ local function socks5_handler(conn)
 		return
 	end
 
-	logger.infof("[client] socks5 target: %s:%d", domain, port)
+	logger.infof("[client] socks5 target: %s:%s", domain, port)
 	create_tunnel(conn, domain, port)
 end
 
@@ -229,8 +229,10 @@ local function parse_sni(conn)
 	end
 
 	local typ, major, minor, len = string.unpack(">I1I1I1I2", head)
+	logger.debugf("[client] TLS record: type=%s, version=%s.%s, len=%s", typ, major, minor, len)
+
 	if typ ~= 22 then  -- Handshake
-		logger.errorf("[client] not a tls handshake: type=%s", typ)
+		logger.debugf("[client] not a tls handshake: type=%s (expected 22)", typ)
 		return nil, nil
 	end
 
@@ -238,49 +240,96 @@ local function parse_sni(conn)
 	if not body then
 		return nil, nil
 	end
+	logger.debugf("[client] read TLS body: %s bytes", #body)
 
 	local offset = 1
-	local msgtype = string.unpack(">I1", body, offset)
-	if msgtype ~= 1 then  -- ClientHello
+	if offset > #body then
 		return nil, nil
 	end
 
-	offset = offset + 4 + 2 + 4 + 28  -- msgtype, msglen, client ver, random
+	local msgtype = string.unpack(">I1", body, offset)
+	logger.debugf("[client] handshake msgtype=%s", msgtype)
+
+	if msgtype ~= 1 then  -- ClientHello
+		logger.debugf("[client] not ClientHello: msgtype=%s", msgtype)
+		return nil, nil
+	end
+
+	-- msgtype(1) + msglen(3) + client_ver(2) + random(32) = 38 bytes
+	offset = offset + 1 + 3 + 2 + 32
+	if offset > #body then
+		logger.debugf("[client] body too short: offset=%s, len=%s", offset, #body)
+		return nil, nil
+	end
+
 	local session_len = string.unpack(">I1", body, offset)
-	offset = offset + session_len + 1
+	logger.debugf("[client] session_id length=%s", session_len)
+	offset = offset + 1 + session_len
+
+	if offset + 2 > #body then
+		logger.debugf("[client] body too short for cipher suites: offset=%s", offset)
+		return nil, nil
+	end
 
 	local cipher_len = string.unpack(">I2", body, offset)
-	offset = offset + cipher_len + 2
+	logger.debugf("[client] cipher suites length=%s", cipher_len)
+	offset = offset + 2 + cipher_len
+
+	if offset + 1 > #body then
+		logger.debugf("[client] body too short for compression: offset=%s", offset)
+		return nil, nil
+	end
 
 	local compress_len = string.unpack(">I1", body, offset)
-	offset = offset + compress_len + 1
+	logger.debugf("[client] compression methods length=%s", compress_len)
+	offset = offset + 1 + compress_len
 
-	if offset >= len then
+	if offset + 2 > #body then
+		logger.debugf("[client] no extensions present")
 		return nil, nil
 	end
 
 	-- Extensions
 	local ext_len = string.unpack(">I2", body, offset)
+	logger.debugf("[client] extensions total length=%s", ext_len)
 	offset = offset + 2
 
 	while ext_len > 0 do
+		if offset + 4 > #body then
+			break
+		end
+
 		local t, l = string.unpack(">I2I2", body, offset)
+		logger.debugf("[client] extension: type=%s, len=%s", t, l)
 		offset = offset + 4
 		ext_len = ext_len - 4
 
 		if t == 0x0 then  -- server_name extension
+			logger.debug("[client] found server_name extension")
 			while l > 0 do
+				if offset + 2 > #body then
+					return nil, nil
+				end
+
 				local list_len = string.unpack(">I2", body, offset)
 				offset = offset + 2
 				l = l - 2
 
 				while list_len > 0 do
+					if offset + 3 > #body then
+						return nil, nil
+					end
+
 					local nt, nl = string.unpack(">I1I2", body, offset)
 					offset = offset + 3
 					list_len = list_len - 3
 
 					if nt == 0 then  -- host_name
+						if offset + nl > #body then
+							return nil, nil
+						end
 						local domain = string.sub(body, offset, offset + nl - 1)
+						logger.debugf("[client] extracted SNI domain: %s", domain)
 						return domain, head .. body
 					end
 
@@ -299,14 +348,14 @@ end
 
 -- SNI proxy handler
 local function sni_handler(conn)
-	logger.info("[client] sni connection")
+	logger.debug("[client] sni connection:", conn:remoteaddr())
 	local domain, firstdata = parse_sni(conn)
 	if not domain then
 		logger.error("[client] failed to parse sni")
 		conn:close()
 		return
 	end
-	logger.infof("[client] sni domain: %s", domain)
+	logger.debugf("[client] sni domain: %s", domain)
 	create_tunnel(conn, domain, 443, firstdata)
 end
 
