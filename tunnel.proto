@@ -15,4 +15,5 @@ message ConnectResponse {
 
 service Tunnel {
   rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
+  rpc Listen(stream ConnectRequest) returns (stream ConnectResponse);
 }

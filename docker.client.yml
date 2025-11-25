@@ -4,10 +4,25 @@ services:
     ports:
       - "1080:1080"    # SOCKS5 proxy
       - "443:443"      # TLS SNI proxy
-      - "993:993"    # Fixed proxy
+      - "993:993"      # Fixed proxy
+    volumes:
+      - ./client_grpc.lua:/app/client_grpc.lua
+      - ./common.conf:/app/common.conf
+      - ./tunnel.proto:/app/tunnel.proto
     environment:
       - KEY=${KEY:-0000000000000000}
       - SERVER=${SERVER:-127.0.0.1:443}
       - SOCKS5=${SOCKS5:-0.0.0.0:1080}
+      - LOKI_ADDR=${LOKI_ADDR:-127.0.0.1:3100} # Target Loki Address (LAN IP)
     restart: unless-stopped
     container_name: tunnel-client
+
+  alloy-sidecar:
+    image: grafana/alloy:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config.client.alloy:/etc/alloy/config.alloy
+    environment:
+      - LOKI_ADDR=${LOKI_ADDR:-172.26.75.90:3100}
+    command: run --server.http.listen-addr=0.0.0.0:12345 /etc/alloy/config.alloy
+    container_name: alloy-sidecar

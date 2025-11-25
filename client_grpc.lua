@@ -124,8 +124,8 @@ end
 
 -- SOCKS5 authentication
 local function socks5_auth(conn)
-	local str = conn:read(3)
-	if not str then
+	local str, err = conn:read(3)
+	if err then
 		return false
 	end
 
@@ -348,44 +348,132 @@ end
 
 -- SNI proxy handler
 local function sni_handler(conn)
-	logger.debug("[client] sni connection:", conn:remoteaddr())
 	local domain, firstdata = parse_sni(conn)
 	if not domain then
 		logger.error("[client] failed to parse sni")
 		conn:close()
 		return
 	end
-	logger.debugf("[client] sni domain: %s", domain)
 	create_tunnel(conn, domain, 443, firstdata)
 end
 
 -- Start SOCKS5 proxy
-tcp.listen {
-	addr = env.get("socks5"),
+local l, err = tcp.listen {
+	addr = "0.0.0.0:1080",
 	accept = function(conn)
+		logger.infof("[client] socks5 accept:%s", conn:remoteaddr())
 		socks5_handler(conn)
 	end
 }
-
-logger.infof("[client] socks5 proxy listening on %s", env.get("socks5"))
+assert(l, err)
 
 -- Start SNI proxy
-tcp.listen {
+local l2, err2 = tcp.listen {
 	addr = "0.0.0.0:443",
 	accept = function(conn)
+		logger.infof("[client] sni accept:%s", conn:remoteaddr())
 		sni_handler(conn)
 	end
 }
+assert(l2, err2)
 
-logger.infof("[client] sni proxy listening on 0.0.0.0:443")
-
--- Fixed port proxy example (optional)
-tcp.listen {
+local l3, err3 = tcp.listen {
 	addr = "0.0.0.0:993",
 	accept = function(conn)
-		logger.info("[client] fixed proxy connection")
+		logger.info("[client] imap accpet:", conn:remoteaddr())
 		create_tunnel(conn, "imap.gmail.com", 993)
 	end
 }
+assert(l3, err3)
 
-logger.infof("[client] fixed proxy listening on 0.0.0.0:9930 -> imap.gmail.com:993")
+logger.info("[client] sni proxy listening on 0.0.0.0:443")
+logger.info("[client] socks5 proxy listening on 0.0.0.0:1080")
+logger.info("[client] fixed proxy listening on 0.0.0.0:993 -> imap.gmail.com:993")
+
+-- Reverse Agent Logic
+local function reverse_agent()
+	while true do
+		local stream<close>, err = service:Listen()
+		if not stream then
+			logger.errorf("[client] reverse agent failed to listen: %s", err)
+			task.sleep(1000)
+			goto continue
+		end
+
+		logger.info("[client] reverse agent registered, waiting for traffic...")
+
+		-- Wait for first packet from server (signaling a new connection)
+		local req = stream:read()
+		if not req then
+			logger.info("[client] reverse agent stream closed before traffic")
+			goto continue
+		end
+
+		logger.info("[client] reverse traffic received, connecting to local target...")
+
+		-- Connect to local service (e.g. Loki)
+		local loki_addr = env.get("LOKI_ADDR") or "127.0.0.1:3100"
+		local conn, err = tcp.connect(loki_addr)
+		if not conn then
+			logger.errorf("[client] failed to connect to local target %s: %s", loki_addr, err)
+			goto continue
+		end
+
+		-- Fork task to read from conn and write to stream
+		task.fork(function()
+			while true do
+				local data, err = conn:read(1)
+				if err then
+					local pad_len = math.random(0, 512)
+					local pad = string.rep(string.char(math.random(0, 255)), pad_len)
+					stream:write({data = "", pad = pad})
+					conn:close()
+					return
+				end
+				local more = conn:read(conn:unreadbytes())
+				if more and more ~= "" then
+					data = data .. more
+				end
+				local pad_len = math.random(0, 512)
+				local pad = string.rep(string.char(math.random(0, 255)), pad_len)
+				local ok, err = stream:write({data = data, pad = pad})
+				if not ok then
+					conn:close()
+					return
+				end
+			end
+		end)
+
+		-- Write the first packet we already read
+		if req.data and #req.data > 0 then
+			conn:write(req.data)
+		end
+
+		-- Continue reading from stream and writing to conn
+		while true do
+			local req = stream:read()
+			if not req then
+				conn:close()
+				break
+			end
+			local data = req.data
+			if not data or #data == 0 then
+				conn:close()
+				break
+			end
+			local ok, err = conn:write(data)
+			if not ok then
+				conn:close()
+				break
+			end
+		end
+
+		::continue::
+	end
+end
+
+-- Start a pool of reverse agents
+for i = 1, 5 do
+	task.fork(reverse_agent)
+end
+logger.info("[client] started 5 reverse agents for 127.0.0.1:3100")

@@ -1,0 +1,24 @@
+// Server-side Alloy Configuration
+// Pushes logs to the local Tunnel Server (which forwards to Intranet)
+
+discovery.docker "linux_containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+loki.source.docker "default" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.docker.linux_containers.targets
+  forward_to = [loki.write.tunnel.receiver]
+
+  labels = {
+    env = "ecs-prod",
+    role = "server",
+  }
+}
+
+loki.write "tunnel" {
+  endpoint {
+    // Tunnel Server is listening on localhost:3100 in the shared network namespace
+    url = "http://127.0.0.1:3100/loki/api/v1/push"
+  }
+}

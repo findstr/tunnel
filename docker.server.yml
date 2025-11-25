@@ -7,3 +7,14 @@ services:
       - KEY=${KEY:-0000000000000000}
     restart: unless-stopped
     container_name: tunnel-server
+
+  alloy-sidecar:
+    image: grafana/alloy:latest
+    network_mode: "service:tunnel-server" # "Pod" mode: share localhost with tunnel-server
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config.server.alloy:/etc/alloy/config.alloy
+    command: run --server.http.listen-addr=0.0.0.0:12345 /etc/alloy/config.alloy
+    container_name: alloy-sidecar
+    depends_on:
+      - tunnel-server

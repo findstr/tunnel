@@ -8,6 +8,7 @@ local protoc = require "protoc"
 local registrar = require "silly.net.grpc.registrar".new()
 local cipher = require "silly.crypto.cipher"
 local base64 = require "silly.encoding.base64"
+local wait_pool = {}
 
 env.load("common.conf")
 
@@ -168,8 +169,99 @@ registrar:register(proto, "Tunnel", {
 				return
 			end
 		end
+	end,
+	Listen = function(stream)
+		local co = task.running()
+		table.insert(wait_pool, {
+			co = co,
+			stream = stream
+		})
+		logger.info("[server] new reverse agent connected, pool size:", #wait_pool)
+
+		-- Wait for wakeup
+		local conn = task.wait()
+		if not conn then
+			logger.info("[server] reverse agent disconnected (wait failed)")
+			return
+		end
+
+		logger.info("[server] reverse tunnel established")
+
+		-- Fork task to read from conn and write to stream
+		task.fork(function()
+			while true do
+				local data, err = conn:read(1)
+				if err then
+					-- Send close signal
+					local pad_len = math.random(0, 512)
+					local pad = string.rep(string.char(math.random(0, 255)), pad_len)
+					stream:write({data = "", pad = pad})
+					logger.infof("[server] read local conn err:%s", err)
+					conn:close()
+					return
+				end
+
+				local more = conn:read(conn:unreadbytes())
+				if more and more ~= "" then
+					data = data .. more
+				end
+
+				local pad_len = math.random(0, 512)
+				local pad = string.rep(string.char(math.random(0, 255)), pad_len)
+				local ok, err = stream:write({data = data, pad = pad})
+				if not ok then
+					logger.infof("[server] write stream failed: %s", err)
+					conn:close()
+					return
+				end
+			end
+		end)
+
+		-- Current task: read from stream and write to conn
+		while true do
+			local req = stream:read()
+			if not req then
+				logger.info("[server] read stream closed")
+				conn:close()
+				return
+			end
+			local data = req.data
+			if not data or #data == 0 then
+				logger.info("[server] remote conn closed")
+				conn:close()
+				return
+			end
+			local ok, err = conn:write(req.data)
+			if not ok then
+				logger.info("[server] write conn failed:", err)
+				conn:close()
+				return
+			end
+		end
 	end
 })
+
+-- Start Reverse Proxy Listener (e.g. for Loki)
+local l_rev, err_rev = tcp.listen {
+	addr = "0.0.0.0:3100",
+	accept = function(conn)
+		logger.infof("[server] reverse proxy accept:%s", conn:remoteaddr())
+		if #wait_pool == 0 then
+			logger.error("[server] no available reverse agent")
+			conn:close()
+			return
+		end
+
+		-- Pop a stream from pool
+		local item = table.remove(wait_pool)
+		logger.info("[server] using reverse agent, remaining pool size:", #wait_pool)
+
+		-- Wakeup the Listen RPC handler with the connection
+		task.wakeup(item.co, conn)
+	end
+}
+assert(l_rev, err_rev)
+logger.infof("[server] reverse proxy listening on 0.0.0.0:3100")
 
 -- Start gRPC server
 local server = grpc.listen {
