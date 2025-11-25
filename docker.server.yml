@@ -1,20 +1,34 @@
+version: "3.9"
+
+networks:
+  tunnel-net:
+    driver: bridge
+
 services:
   tunnel-server:
     image: ghcr.io/findstr/tunnel:latest-server
+    container_name: tunnel-server
     ports:
-      - "8443:443"
+      - "9000:443"   # gRPC tunnel (only port that needs external access)
+    volumes:
+      - ./server_grpc.lua:/app/server_grpc.lua
+      - ./common.conf:/app/common.conf
+      - ./tunnel.proto:/app/tunnel.proto
     environment:
       - KEY=${KEY:-0000000000000000}
+      - TZ=Asia/Shanghai
     restart: unless-stopped
-    container_name: tunnel-server
 
   alloy-sidecar:
     image: grafana/alloy:latest
-    network_mode: "service:tunnel-server" # "Pod" mode: share localhost with tunnel-server
+    container_name: alloy-sidecar
+    network_mode: "service:tunnel-server"  # Share network with tunnel-server (Pod mode)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./config.server.alloy:/etc/alloy/config.alloy
+      - ./alloy_wal:/var/lib/alloy/wal   # WAL 挂载，方便清理
     command: run --server.http.listen-addr=0.0.0.0:12345 /etc/alloy/config.alloy
-    container_name: alloy-sidecar
+    restart: unless-stopped
     depends_on:
       - tunnel-server
+

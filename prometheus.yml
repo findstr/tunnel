@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Prometheus只作为存储后端，通过Alloy的remote write接收tunnel数据
+# 不scrape任何targets（包括自己），避免混入非tunnel数据
+scrape_configs: []

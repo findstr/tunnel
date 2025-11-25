@@ -5,20 +5,68 @@ discovery.docker "linux_containers" {
   host = "unix:///var/run/docker.sock"
 }
 
+discovery.relabel "tunnel_client_only" {
+  targets = discovery.docker.linux_containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = ".*(tunnel-client).*"
+    action        = "keep"
+  }
+
+  // Add env label
+  rule {
+    target_label = "env"
+    replacement  = "intranet"
+  }
+
+  // Add role label
+  rule {
+    target_label = "role"
+    replacement  = "client"
+  }
+}
+
 loki.source.docker "default" {
   host       = "unix:///var/run/docker.sock"
-  targets    = discovery.docker.linux_containers.targets
+  targets    = discovery.relabel.tunnel_client_only.output
   forward_to = [loki.write.local_loki.receiver]
 
-  labels = {
-    env = "intranet",
-    role = "client",
-  }
+  // Only tail new logs, don't read historical logs
+  refresh_interval = "5s"
 }
 
 loki.write "local_loki" {
   endpoint {
-    // Uses the LOKI_ADDR environment variable injected by Docker Compose
-    url = "http://" + sys.env("LOKI_ADDR") + "/loki/api/v1/push"
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+// Scrape Prometheus metrics from tunnel-client
+prometheus.scrape "tunnel_client" {
+  targets = [{
+    __address__ = "tunnel-client:9001",
+    job         = "tunnel-client",
+    instance    = "intranet-client",
+  }]
+  forward_to      = [prometheus.remote_write.local_prometheus.receiver]
+  scrape_interval = "15s"  // 确保 1 分钟内有 4 个数据点，满足 rate() 计算需求
+  scrape_timeout  = "10s"
+}
+
+// Send metrics to Prometheus
+prometheus.remote_write "local_prometheus" {
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+
+    // 配置发送队列参数
+    queue_config {
+      // 本地网络，10s 延迟足够低，同时减少网络请求频率
+      batch_send_deadline = "10s"
+    }
+  }
+
+  wal {
+    truncate_frequency = "2h"
   }
 }

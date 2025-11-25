@@ -1,24 +1,66 @@
-// Server-side Alloy Configuration
-// Pushes logs to the local Tunnel Server (which forwards to Intranet)
-
 discovery.docker "linux_containers" {
   host = "unix:///var/run/docker.sock"
 }
 
+discovery.relabel "tunnel_server_only" {
+  targets = discovery.docker.linux_containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = ".*(tunnel-server).*"
+    action        = "keep"
+  }
+
+  // Add env label
+  rule {
+    target_label = "env"
+    replacement  = "ecs-prod"
+  }
+
+  // Add role label
+  rule {
+    target_label = "role"
+    replacement  = "server"
+  }
+}
+
 loki.source.docker "default" {
   host       = "unix:///var/run/docker.sock"
-  targets    = discovery.docker.linux_containers.targets
+  targets    = discovery.relabel.tunnel_server_only.output
   forward_to = [loki.write.tunnel.receiver]
-
-  labels = {
-    env = "ecs-prod",
-    role = "server",
-  }
 }
 
 loki.write "tunnel" {
   endpoint {
-    // Tunnel Server is listening on localhost:3100 in the shared network namespace
-    url = "http://127.0.0.1:3100/loki/api/v1/push"
+    url = "http://tunnel-server:3100/loki/api/v1/push"
+  }
+}
+
+// Scrape Prometheus metrics from tunnel-server
+prometheus.scrape "tunnel_server" {
+  targets = [{
+    __address__ = "tunnel-server:9001",
+    job         = "tunnel-server",
+    instance    = "ecs-server",
+  }]
+  forward_to      = [prometheus.remote_write.tunnel.receiver]
+  scrape_interval = "15s"  // 确保 1 分钟内有 4 个数据点，满足 rate() 计算需求
+  scrape_timeout  = "10s"
+}
+
+// Send metrics to Prometheus (through the tunnel to intranet)
+prometheus.remote_write "tunnel" {
+  endpoint {
+    url = "http://tunnel-server:9090/api/v1/write"
+
+    // 配置发送队列参数
+    queue_config {
+      // 通过 tunnel 传输，20s 延迟可接受，减少 tunnel 流量
+      batch_send_deadline = "20s"
+    }
+  }
+
+  wal {
+    truncate_frequency = "2h"
   }
 }

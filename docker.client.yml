@@ -1,10 +1,13 @@
 services:
+  # Tunnel Client
   tunnel-client:
     image: ghcr.io/findstr/tunnel:latest-client
     ports:
       - "1080:1080"    # SOCKS5 proxy
       - "443:443"      # TLS SNI proxy
       - "993:993"      # Fixed proxy
+      - "9011:9001"    # Metrics (temporary for debugging)
+      - "9090:9090"    # Metrics (temporary for debugging)
     volumes:
       - ./client_grpc.lua:/app/client_grpc.lua
       - ./common.conf:/app/common.conf
@@ -13,16 +16,67 @@ services:
       - KEY=${KEY:-0000000000000000}
       - SERVER=${SERVER:-127.0.0.1:443}
       - SOCKS5=${SOCKS5:-0.0.0.0:1080}
-      - LOKI_ADDR=${LOKI_ADDR:-127.0.0.1:3100} # Target Loki Address (LAN IP)
+      - LOKI_ADDR=loki:3100  # 使用容器名，不需要 IP
+      - ENABLE_REVERSE_PROXY=${ENABLE_REVERSE_PROXY:-true}
+      - TZ=Asia/Shanghai
     restart: unless-stopped
     container_name: tunnel-client
 
+  # Alloy Sidecar (采集 tunnel-client 的日志和指标)
   alloy-sidecar:
     image: grafana/alloy:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./config.client.alloy:/etc/alloy/config.alloy
     environment:
-      - LOKI_ADDR=${LOKI_ADDR:-172.26.75.90:3100}
+      - LOKI_ADDR=loki:3100  # 使用容器名
     command: run --server.http.listen-addr=0.0.0.0:12345 /etc/alloy/config.alloy
+    restart: unless-stopped
     container_name: alloy-sidecar
+
+  # Loki (日志存储)
+  loki:
+    image: grafana/loki:2.9.2
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml
+    restart: unless-stopped
+    container_name: loki
+
+  # Prometheus (指标存储)
+  prometheus:
+    image: prom/prometheus:latest
+    # Grafana 通过 Docker 网络访问，不需要暴露端口
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-remote-write-receiver'
+    restart: unless-stopped
+    container_name: prometheus
+
+  # Grafana (可视化)
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+      - ./provider.yml:/etc/grafana/provisioning/dashboards/provider.yml
+      - ./tunnel-monitoring.json:/etc/grafana/provisioning/dashboards/tunnel-monitoring.json
+      - ./tunnel-logs.json:/etc/grafana/provisioning/dashboards/tunnel-logs.json
+    environment:
+      - GF_SECURITY_ADMIN_USER=findstr
+      - GF_SECURITY_ADMIN_PASSWORD=findstr
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION=false
+    depends_on:
+      - loki
+      - prometheus
+    restart: unless-stopped
+    container_name: grafana
+
+volumes:
+  prometheus_data:

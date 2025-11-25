@@ -6,6 +6,7 @@ message ConnectRequest {
   string domain = 1;   // Target domain:port (only in first request)
   bytes data = 2;      // Payload data
   bytes pad = 3;       // Random padding
+  int32 port = 4;      // Target port (for reverse proxy, only in first request)
 }
 
 message ConnectResponse {
@@ -13,7 +14,27 @@ message ConnectResponse {
   bytes pad = 2;       // Random padding
 }
 
+message ListenRequest {
+  int32 port = 1;      // Target local port (only in first request)
+  bytes data = 2;      // Payload data
+  bytes pad = 3;       // Random padding
+}
+
+message ListenResponse {
+  bytes data = 1;      // Payload data
+  bytes pad = 2;       // Random padding
+}
+
+message KeepAliveRequest {
+  int64 timestamp = 1; // Client timestamp in milliseconds
+}
+
+message KeepAliveResponse {
+  int64 timestamp = 1; // Echo client timestamp
+}
+
 service Tunnel {
   rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
-  rpc Listen(stream ConnectRequest) returns (stream ConnectResponse);
+  rpc Listen(stream ListenRequest) returns (stream ListenResponse);
+  rpc KeepAlive(KeepAliveRequest) returns (KeepAliveResponse);
 }
